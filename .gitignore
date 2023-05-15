@@ -133,7 +133,7 @@ tensorflow_code
 
 # Models
 proc_data
-
+models
 # examples
 runs
 /runs_old
@@ -145,7 +145,9 @@ runs
 # data
 /data
 serialization_dir
-
+datasets
+class_dir
+output
 # emacs
 *.*~
 debug.env

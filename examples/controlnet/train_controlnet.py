@@ -27,6 +27,8 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 import transformers
 from accelerate import Accelerator
+#* deepseed code change
+from accelerate.utils import DummyOptim
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from datasets import load_dataset
@@ -50,6 +52,9 @@ from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
+
+os.environ["CUDA_LAUNCH_BLOCKING"]="1"
+os.environ["TORCH_USE_CUDA_DSA"] = "1"
 
 if is_wandb_available():
     import wandb
@@ -235,6 +240,13 @@ def parse_args(input_args=None):
         default=None,
         required=True,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
+        "--model_dir",
+        type=str,
+        default=None,
+        required=False,
+        help="Path to save pretrained model"
     )
     parser.add_argument(
         "--controlnet_model_name_or_path",
@@ -693,7 +705,7 @@ def make_train_dataset(args, tokenizer, accelerator):
             dataset["train"] = dataset["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
         # Set the training transforms
         train_dataset = dataset["train"].with_transform(preprocess_train)
-
+    # [image, conditional_image, text]
     return train_dataset
 
 
@@ -769,14 +781,33 @@ def main(args):
     text_encoder_cls = import_model_class_from_model_name_or_path(args.pretrained_model_name_or_path, args.revision)
 
     # Load scheduler and models
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+    local_scheduler_path = os.path.join(args.model_dir, args.pretrained_model_name_or_path.split("/")[-1], "scheduler")
+    scheduler_path = (local_scheduler_path if os.path.exists(local_scheduler_path) else args.pretrained_model_name_or_path)
+
+    noise_scheduler = DDPMScheduler.from_pretrained(scheduler_path, subfolder="scheduler")
+    #* save if first time downloaded
+    if not os.path.exists(local_scheduler_path):
+        noise_scheduler.save_pretrained(local_scheduler_path)
+
     text_encoder = text_encoder_cls.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
     )
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision)
+    local_vae_path = os.path.join(args.model_dir, args.pretrained_model_name_or_path.split("/")[-1], "vae")
+    vae_path = (local_vae_path if os.path.exists(local_vae_path) else args.pretrained_model_name_or_path)
+    vae = AutoencoderKL.from_pretrained(vae_path, subfolder="vae", revision=args.revision)
+    #* save if first time downloaded
+    if not os.path.exists(local_vae_path):
+        vae.save_pretrained(local_vae_path)
+
+    #* load from disk if has already been downloaded
+    local_unet_path = os.path.join(args.model_dir, args.pretrained_model_name_or_path.split("/")[-1], "unet")
+    unet_path = (local_unet_path if os.path.exists(local_unet_path) else args.pretrained_model_name_or_path)
     unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
+        unet_path, subfolder="unet", revision=args.revision
     )
+    #* save if first time downloaded
+    if not os.path.exists(local_unet_path):
+        unet.save_pretrained(local_unet_path)
 
     if args.controlnet_model_name_or_path:
         logger.info("Loading existing controlnet weights")
@@ -794,10 +825,8 @@ def main(args):
             while len(weights) > 0:
                 weights.pop()
                 model = models[i]
-
                 sub_dir = "controlnet"
                 model.save_pretrained(os.path.join(output_dir, sub_dir))
-
                 i -= 1
 
         def load_model_hook(models, input_dir):
@@ -872,7 +901,19 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
+    #* configure optimizer in deeepseed config, so code changes will be made
+    optimizer_class = (
+     optimizer_class
+     if accelerator.state.deepspeed_plugin is None
+     or "optimizer" not in accelerator.state.deepspeed_plugin.deepspeed_config
+     else DummyOptim
+    )
+
     params_to_optimize = controlnet.parameters()
+
+    # fsdp  change, prepare model before creating optimizer
+    # controlnet = accelerator.prepare(controlnet)
+
     optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
@@ -943,7 +984,7 @@ def main(args):
 
         accelerator.init_trackers(args.tracker_project_name, config=tracker_config)
 
-    # Train!
+    # Train! 8 = 1 * 4 * 2
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
     logger.info("***** Running training *****")
@@ -985,7 +1026,7 @@ def main(args):
         initial_global_step = 0
 
     progress_bar = tqdm(
-        range(0, args.max_train_steps),
+        range(args.max_train_steps),
         initial=initial_global_step,
         desc="Steps",
         # Only show the progress bar once on each machine.
@@ -1002,25 +1043,30 @@ def main(args):
 
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
-                bsz = latents.shape[0]
+                bsz = latents.shape[0]  # [1, 4, 64, 64]
                 # Sample a random timestep for each image
                 timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
                 timesteps = timesteps.long()
 
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
+                # [1,4,64,64]
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # Get the text embedding for conditioning
+                # batch["intput_ids"] = [1,77]; 
+                # batch["pixel_values"] =[1,3,512,512]; 
+                # batch["conditioning_pixel_values"] = [1,3,512,512]  (why all zeros)
+                # => hidden_states = [1, 77, 768]
                 encoder_hidden_states = text_encoder(batch["input_ids"])[0]
 
                 controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
 
                 down_block_res_samples, mid_block_res_sample = controlnet(
-                    noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=encoder_hidden_states,
-                    controlnet_cond=controlnet_image,
+                    noisy_latents,  # [1,4,64,64]
+                    timesteps,  # [long]
+                    encoder_hidden_states=encoder_hidden_states,  # [1,77,768]
+                    controlnet_cond=controlnet_image, #[1,4,64,64] with all zeros
                     return_dict=False,
                 )
 

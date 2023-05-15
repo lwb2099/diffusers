@@ -126,6 +126,12 @@ def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: st
 def parse_args(input_args=None):
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
     parser.add_argument(
+        "--model_dir", 
+        type=str, 
+        default=None, 
+        required=None,
+        help="Path to store downloaded pretrained models")
+    parser.add_argument(
         "--pretrained_model_name_or_path",
         type=str,
         default=None,
@@ -736,7 +742,10 @@ def main(args):
 
     # Load the tokenizer
     if args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, revision=args.revision, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, 
+                                                  revision=args.revision, 
+                                                  use_fast=False, 
+                                                )
     elif args.pretrained_model_name_or_path:
         tokenizer = AutoTokenizer.from_pretrained(
             args.pretrained_model_name_or_path,
@@ -749,20 +758,23 @@ def main(args):
     text_encoder_cls = import_model_class_from_model_name_or_path(args.pretrained_model_name_or_path, args.revision)
 
     # Load scheduler and models
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
+    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler",)
     text_encoder = text_encoder_cls.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
+        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision,
     )
     if model_has_vae(args):
         vae = AutoencoderKL.from_pretrained(
-            args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision
+            args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision,
         )
     else:
         vae = None
 
+    unet_path = os.path.join(args.model_dir, args.pretrained_model_name_or_path.split("/")[-1], "unet") if os.path.exists(os.path.join(args.model_dir, "unet")) else args.pretrained_model_name_or_path
     unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
+        unet_path, subfolder="unet", revision=args.revision,
     )
+    # 3.44G
+    unet.save_pretrained(os.path.join(args.model_dir, args.pretrained_model_name_or_path.split("/")[-1],  "unet"))
 
     # We only train the additional adapter LoRA layers
     if vae is not None:
@@ -1122,7 +1134,6 @@ def main(args):
                     0, noise_scheduler.config.num_train_timesteps, (bsz,), device=model_input.device
                 )
                 timesteps = timesteps.long()
-
                 # Add noise to the model input according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 noisy_model_input = noise_scheduler.add_noise(model_input, noise, timesteps)

@@ -429,18 +429,18 @@ def main():
     vae.to(accelerator.device, dtype=weight_dtype)
     text_encoder.to(accelerator.device, dtype=weight_dtype)
 
-    # now we will add new LoRA weights to the attention layers
-    # It's important to realize here how many attention weights will be added and of which sizes
-    # The sizes of the attention layers consist only of two different variables:
-    # 1) - the "hidden_size", which is increased according to `unet.config.block_out_channels`.
-    # 2) - the "cross attention size", which is set to `unet.config.cross_attention_dim`.
+    #* now we will add new LoRA weights to the attention layers
+    #* It's important to realize here how many attention weights will be added and of which sizes
+    #* The sizes of the attention layers consist only of two different variables:
+    #* 1) - the "hidden_size", which is increased according to `unet.config.block_out_channels`.
+    #* 2) - the "cross attention size", which is set to `unet.config.cross_attention_dim`.
 
-    # Let's first see how many attention processors we will have to set.
-    # For Stable Diffusion, it should be equal to:
-    # - down blocks (2x attention layers) * (2x transformer layers) * (3x down blocks) = 12
-    # - mid blocks (2x attention layers) * (1x transformer layers) * (1x mid blocks) = 2
-    # - up blocks (2x attention layers) * (3x transformer layers) * (3x down blocks) = 18
-    # => 32 layers
+    #* Let's first see how many attention processors we will have to set.
+    #* For Stable Diffusion, it should be equal to:
+    #* - down blocks (2x attention layers) * (2x transformer layers) * (3x down blocks) = 12
+    #* - mid blocks (2x attention layers) * (1x transformer layers) * (1x mid blocks) = 2
+    #* - up blocks (2x attention layers) * (3x transformer layers) * (3x down blocks) = 18
+    #* => 32 layers
 
     # Set correct lora layers
     lora_attn_procs = {}
@@ -628,7 +628,7 @@ def main():
         lora_layers, optimizer, train_dataloader, lr_scheduler
     )
 
-    # We need to recalculate our total training steps as the size of the training dataloader may have changed.
+    #* We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     if overrode_max_train_steps:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
@@ -761,6 +761,7 @@ def main():
             if global_step >= args.max_train_steps:
                 break
 
+        #* Validation
         if accelerator.is_main_process:
             if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
                 logger.info(
