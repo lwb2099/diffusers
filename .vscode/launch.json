@@ -1,0 +1,114 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "train_dream_booth_lora",
+            "type": "python",
+            "module": "accelerate.commands.launch",
+            "request": "launch",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config_file", "examples/accelerate_config/fsdp.yaml",
+                "--main_process_port", "25910",
+                "examples/dreambooth/train_dreambooth_lora.py",
+                "--pretrained_model_name_or_path", "CompVis/stable-diffusion-v1-4",
+                //* directory
+                "--model_dir", "examples/models",
+                "--instance_data_dir", "examples/datasets/dog_example",
+                //* use the same one for simplicity
+                "--class_data_dir", "examples/dreambooth/class_dir/dog",
+                "--output_dir", "examples/dreambooth/output",
+                //* use prior loss 
+                "--with_prior_preservation",
+                "--prior_loss_weight", "1.0",
+                //* lr
+                "--learning_rate", "5e-6",
+                "--lr_scheduler", "constant",
+                "--lr_warmup_steps", "0",
+                //* batch & steps
+                "--train_batch_size", "1",
+                "--sample_batch_size", "1",
+                "--max_train_steps", "800",
+                //* ckpt
+                //* "--resume_from_checkpoint", "checkpoint-1500",
+                "--checkpointing_steps", "100",
+                //* dream booth
+                "--instance_prompt", "\"a photo of sks dog\"",
+                "--class_prompt", "\"a photo of dog\"",
+                "--resolution", "512",
+                "--num_class_images", "30",
+                //* train lora layers of text encoder as well
+                "--train_text_encoder",
+                //* tracker
+                "--report_to", "wandb",
+                //* faster training & less memory
+                //* use xformers
+                "--enable_xformers_memory_efficient_attention",
+                "--gradient_accumulation_steps", "3",  // 间隔 step 次再更新一次参数，减少节点间通信开销
+                "--gradient_checkpointing", // bp时重新计算中间梯度，时间换空间
+                //* precision
+                "--mixed_precision", "fp16",
+                //* bit and bytes 
+                "--use_8bit_adam", //! (not compatible with deepseed for now)
+            ]
+        },
+        {
+            "name": "train_controlnet",
+            "type": "python",
+            "module": "accelerate.commands.launch",
+            "request": "launch",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config_file", "examples/accelerate_config/fsdp.yaml",
+                "--main_process_port", "25910",
+                "examples/controlnet/train_controlnet.py",
+                "--pretrained_model_name_or_path", "runwayml/stable-diffusion-v1-5",
+                "--output_dir", "examples/controlnet/output",
+                "--dataset_name", "fusing/fill50k",
+                "--max_train_samples", "1000",
+                "--cache_dir", "examples/datasets",
+                "--model_dir", "examples/models",
+                "--resolution", "512",
+                "--validation_image", "\"./conditioning_image_1.png\"", "\"./conditioning_image_2.png\"",
+                "--validation_prompt", "\"red circle with blue background\"", "\"cyan circle with brown floral background\"",
+                "--train_batch_size", "1",
+                "--gradient_accumulation_steps", "1",
+                "--gradient_checkpointing",
+                "--enable_xformers_memory_efficient_attention",
+                "--set_grads_to_none",
+                "--mixed_precision", "fp16",
+                // "--use_8bit_adam",
+            ]
+        },
+        {
+            "name": "train_text_to_image",
+            "type": "python",
+            "module": "accelerate.commands.launch",
+            "request": "launch",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config_file", "examples/accelerate_config/deepspeed.yaml",
+                "--main_process_port", "25910",
+                "examples/text_to_image/train_text_to_image.py",
+                "--pretrained_model_name_or_path", "runwayml/stable-diffusion-v1-5",
+                "--output_dir", "examples/controlnet/output",
+                "--dataset_name", "fusing/fill50k",
+                "--cache_dir", "examples/datasets",
+                "--max_train_samples", "1000",
+                "--resolution", "512",
+                "--train_batch_size", "1",
+                "--gradient_accumulation_steps", "1",
+                "--gradient_checkpointing",
+                "--enable_xformers_memory_efficient_attention",
+                "--mixed_precision", "fp16",
+                // "--use_8bit_adam",
+            ]
+        }
+    ]
+}
