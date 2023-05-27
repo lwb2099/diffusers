@@ -27,7 +27,9 @@ from .models.attention_processor import (
     CustomDiffusionXFormersAttnProcessor,
     LoRAAttnAddedKVProcessor,
     LoRAAttnProcessor,
+    LoRAXFormersAttnProcessor,
     SlicedAttnAddedKVProcessor,
+    XFormersAttnProcessor,
 )
 from .utils import (
     DIFFUSERS_CACHE,
@@ -279,7 +281,10 @@ class UNet2DConditionLoadersMixin:
                     attn_processor_class = LoRAAttnAddedKVProcessor
                 else:
                     cross_attention_dim = value_dict["to_k_lora.down.weight"].shape[1]
-                    attn_processor_class = LoRAAttnProcessor
+                    if isinstance(attn_processor, (XFormersAttnProcessor, LoRAXFormersAttnProcessor)):
+                        attn_processor_class = LoRAXFormersAttnProcessor
+                    else:
+                        attn_processor_class = LoRAAttnProcessor
 
                 attn_processors[key] = attn_processor_class(
                     hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, rank=rank
@@ -682,6 +687,7 @@ class TextualInversionLoaderMixin:
                 state_dict = torch.load(model_file, map_location="cpu")
 
             # 2. Load token and embedding correcly from file
+            loaded_token = None
             if isinstance(state_dict, torch.Tensor):
                 if token is None:
                     raise ValueError(
@@ -1326,7 +1332,7 @@ class FromCkptMixin:
         file_extension = pretrained_model_link_or_path.rsplit(".", 1)[-1]
         from_safetensors = file_extension == "safetensors"
 
-        if from_safetensors and use_safetensors is True:
+        if from_safetensors and use_safetensors is False:
             raise ValueError("Make sure to install `safetensors` with `pip install safetensors`.")
 
         # TODO: For now we only support stable diffusion

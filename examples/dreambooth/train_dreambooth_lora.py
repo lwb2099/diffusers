@@ -31,9 +31,10 @@ import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from huggingface_hub import create_repo, model_info, upload_folder
+from huggingface_hub import create_repo, upload_folder
 from packaging import version
 from PIL import Image
+from PIL.ImageOps import exif_transpose
 from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm.auto import tqdm
@@ -67,7 +68,15 @@ check_min_version("0.17.0.dev0")
 logger = get_logger(__name__)
 
 
-def save_model_card(repo_id: str, images=None, base_model=str, train_text_encoder=False, prompt=str, repo_folder=None):
+def save_model_card(
+    repo_id: str,
+    images=None,
+    base_model=str,
+    train_text_encoder=False,
+    prompt=str,
+    repo_folder=None,
+    pipeline: DiffusionPipeline = None,
+):
     img_str = ""
     for i, image in enumerate(images):
         image.save(os.path.join(repo_folder, f"image_{i}.png"))
@@ -79,8 +88,8 @@ license: creativeml-openrail-m
 base_model: {base_model}
 instance_prompt: {prompt}
 tags:
-- stable-diffusion
-- stable-diffusion-diffusers
+- {'stable-diffusion' if isinstance(pipeline, StableDiffusionPipeline) else 'if'}
+- {'stable-diffusion-diffusers' if isinstance(pipeline, StableDiffusionPipeline) else 'if-diffusers'}
 - text-to-image
 - diffusers
 - lora
@@ -514,6 +523,8 @@ class DreamBoothDataset(Dataset):
     def __getitem__(self, index):
         example = {}
         instance_image = Image.open(self.instance_images_path[index % self.num_instance_images])
+        instance_image = exif_transpose(instance_image)
+
         if not instance_image.mode == "RGB":
             instance_image = instance_image.convert("RGB")
         example["instance_images"] = self.image_transforms(instance_image)
@@ -529,6 +540,8 @@ class DreamBoothDataset(Dataset):
 
         if self.class_data_root:
             class_image = Image.open(self.class_images_path[index % self.num_class_images])
+            class_image = exif_transpose(class_image)
+
             if not class_image.mode == "RGB":
                 class_image = class_image.convert("RGB")
             example["class_images"] = self.image_transforms(class_image)
@@ -593,16 +606,6 @@ class PromptDataset(Dataset):
         example["prompt"] = self.prompt
         example["index"] = index
         return example
-
-
-def model_has_vae(args):
-    config_file_name = os.path.join("vae", AutoencoderKL.config_name)
-    if os.path.isdir(args.pretrained_model_name_or_path):
-        config_file_name = os.path.join(args.pretrained_model_name_or_path, config_file_name)
-        return os.path.isfile(config_file_name)
-    else:
-        files_in_repo = model_info(args.pretrained_model_name_or_path, revision=args.revision).siblings
-        return any(file.rfilename == config_file_name for file in files_in_repo)
 
 
 def tokenize_prompt(tokenizer, prompt, tokenizer_max_length=None):
@@ -762,11 +765,13 @@ def main(args):
     text_encoder = text_encoder_cls.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision,
     )
-    if model_has_vae(args):
+    try:
         vae = AutoencoderKL.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision,
         )
-    else:
+    except OSError:
+        # IF does not have a VAE so let's just set it to None
+        # We don't have to error out here
         vae = None
 
     unet_path = os.path.join(args.model_dir, args.pretrained_model_name_or_path.split("/")[-1], "unet") if os.path.exists(os.path.join(args.model_dir, "unet")) else args.pretrained_model_name_or_path
@@ -859,7 +864,7 @@ def main(args):
                     hidden_size=module.out_features, cross_attention_dim=None
                 )
         text_encoder_lora_layers = AttnProcsLayers(text_lora_attn_procs)
-        temp_pipeline = StableDiffusionPipeline.from_pretrained(
+        temp_pipeline = DiffusionPipeline.from_pretrained(
             args.pretrained_model_name_or_path, text_encoder=text_encoder
         )
         temp_pipeline._modify_text_encoder(text_lora_attn_procs)
@@ -1346,6 +1351,7 @@ def main(args):
                 train_text_encoder=args.train_text_encoder,
                 prompt=args.instance_prompt,
                 repo_folder=args.output_dir,
+                pipeline=pipeline,
             )
             upload_folder(
                 repo_id=repo_id,
