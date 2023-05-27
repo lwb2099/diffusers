@@ -295,7 +295,8 @@ class DDPMScheduler(SchedulerMixin, ConfigMixin):
         sample = sample.reshape(batch_size, channels * height * width)
 
         abs_sample = sample.abs()  # "a certain percentile absolute pixel value"
-
+        # 对abs_sample的每一行，计算q分位数 http://www.manongjc.com/detail/31-atytuwozenihcgy.html
+        #* 0.5661: -1.2117, 0.0795, 0.9765, 计算0.25分位数，即计算-1.2117, 0.0795的中位数
         s = torch.quantile(abs_sample, self.config.dynamic_thresholding_ratio, dim=1)
         s = torch.clamp(
             s, min=1, max=self.config.sample_max_value
